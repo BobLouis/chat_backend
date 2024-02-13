@@ -25,6 +25,7 @@ def get_user(scope):
     user = None
     try:
         auth = TokenAuthentication()
+        print(token)
         user = auth.authenticate_credentials(token)
     except AuthenticationFailed:
         pass

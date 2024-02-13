@@ -2,16 +2,61 @@ Directory: chats
 Subdirectory: chats/migrations
 File: chats/admin.py
 Contents:
+
+ 
 from django.contrib import admin
-
-# Register your models here.
-
+from .models import Conversation, Message
+ 
+ 
+admin.site.register(Conversation)
+admin.site.register(Message)
 File: chats/models.py
 Contents:
+import uuid
+ 
+from django.contrib.auth import get_user_model
 from django.db import models
-
-# Create your models here.
-
+ 
+User = get_user_model()
+ 
+ 
+class Conversation(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=128)
+    online = models.ManyToManyField(to=User, blank=True)
+ 
+    def get_online_count(self):
+        return self.online.count()
+ 
+    def join(self, user):
+        self.online.add(user)
+        self.save()
+ 
+    def leave(self, user):
+        self.online.remove(user)
+        self.save()
+ 
+    def __str__(self):
+        return f"{self.name} ({self.get_online_count()})"
+ 
+ 
+class Message(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    conversation = models.ForeignKey(
+        Conversation, on_delete=models.CASCADE, related_name="messages"
+    )
+    from_user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="messages_from_me"
+    )
+    to_user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="messages_to_me"
+    )
+    content = models.CharField(max_length=512)
+    timestamp = models.DateTimeField(auto_now_add=True)
+    read = models.BooleanField(default=False)
+ 
+    def __str__(self):
+        return f"From {self.from_user.username} to {self.to_user.username}: {self.content} [{self.timestamp}]"
 File: chats/tests.py
 Contents:
 from django.test import TestCase
@@ -22,7 +67,7 @@ File: chats/consumers.py
 Contents:
 from channels.generic.websocket import JsonWebsocketConsumer
 from asgiref.sync import async_to_sync
- 
+from .models import Conversation
 class ChatConsumer(JsonWebsocketConsumer):
     """
     This consumer is used to show user's online status,
@@ -31,26 +76,30 @@ class ChatConsumer(JsonWebsocketConsumer):
  
     def __init__(self, *args, **kwargs):
         super().__init__(args, kwargs)
-        self.room_name = None
         self.user = None
+        self.conversation_name = None
+        self.conversation = None
  
+
+
     def connect(self):
         print("Connected!")
         self.user = self.scope["user"]
         if not self.user.is_authenticated:
+            print("user not authenticated!")
             return
-        self.room_name = "home"
+    
         self.accept()
+        self.conversation_name = f"{self.scope['url_route']['kwargs']['conversation_name']}"
+        self.conversation, created = Conversation.objects.get_or_create(name=self.conversation_name)
+    
         async_to_sync(self.channel_layer.group_add)(
-            self.room_name,
+            self.conversation_name,
             self.channel_name,
         )
-        self.send_json(
-            {
-                "type": "welcome_message",
-                "message": "Hey there! You've successfully connected!",
-            }
-        )
+
+
+    
  
     def disconnect(self, code):
         print("Disconnected!")
@@ -108,7 +157,8 @@ def get_user(scope):
     user = None
     try:
         auth = TokenAuthentication()
-        user = auth.authenticate(token)
+        print(token)
+        user = auth.authenticate_credentials(token)
     except AuthenticationFailed:
         pass
     return user or AnonymousUser()
@@ -449,31 +499,31 @@ from rest_framework.decorators import api_view
 def register_user(request):
     username = request.data.get('username')
     password = request.data.get('password')
-    if not (username and password):
-        return Response({'error': 'Missing credentials'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if not username or not password:
+        return Response({"error": "Username and password are required"}, status=status.HTTP_400_BAD_REQUEST)
 
     if User.objects.filter(username=username).exists():
-        return Response({'error': 'Username already exists'}, status=status.HTTP_400_BAD_REQUEST)
-
+        return Response({"error": "Username already exists"}, status=status.HTTP_400_BAD_REQUEST)
+    
     user = User.objects.create_user(username=username, password=password)
     token, _ = Token.objects.get_or_create(user=user)
-    return Response({'token': token.key}, status=status.HTTP_201_CREATED)
+    return Response({"token": token.key, "username": username}, status=status.HTTP_201_CREATED)
 
 @api_view(['POST'])
 def login_user(request):
     username = request.data.get('username')
     password = request.data.get('password')
-    if not (username and password):
-        return Response({'error': 'Please provide both username and password'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if not username or not password:
+        return Response({"error": "Please provide both username and password"}, status=status.HTTP_400_BAD_REQUEST)
 
     user = authenticate(username=username, password=password)
     if user:
         token, _ = Token.objects.get_or_create(user=user)
-        print("1")
-        return Response({'token': token.key})
+        return Response({"token": token.key,"username":username})
     else:
-        print("2")
-        return Response({'error': 'Invalid Credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+        return Response({"error": "Invalid Credentials"}, status=status.HTTP_401_UNAUTHORIZED)
 
 File: conversa_dj/__init__.py
 Contents:
