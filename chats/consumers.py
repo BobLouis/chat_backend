@@ -156,7 +156,20 @@ class ChatConsumer(JsonWebsocketConsumer):
                 },
             )
 
+        if message_type == "typing":
+            async_to_sync(self.channel_layer.group_send)(
+                self.conversation_name,
+                {
+                    "type": "typing",
+                    "user": self.user.username,
+                    "typing": content["typing"],
+                },
+            )
+
         return super().receive_json(content, **kwargs)
+
+    def typing(self, event):
+        self.send_json(event)
 
     def get_receiver(self):
         usernames = self.conversation_name.split("__")
